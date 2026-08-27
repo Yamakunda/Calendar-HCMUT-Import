@@ -1,9 +1,8 @@
 'use client';
 
-import { useMemo, useState, useEffect } from 'react';
+import { useMemo, useState } from 'react';
 import { parseRows, detectAnchor, buildSessions, ClassSession, AnchorInfo } from '@/lib/parser';
 import { downloadIcs } from '@/lib/ics';
-import { requestAccessToken, pushToGoogleCalendar, PushProgress } from '@/lib/google';
 
 const DAY_LABEL: Record<string, string> = {
   '2': 'Th 2',
@@ -29,20 +28,6 @@ export default function Home() {
   const [anchorDate, setAnchorDate] = useState<string>(''); // yyyy-mm-dd, Monday of anchorWeek
   const [sessions, setSessions] = useState<ClassSession[] | null>(null);
   const [parseMsg, setParseMsg] = useState<string>('');
-
-  const [clientId, setClientId] = useState('');
-  const [pushStatus, setPushStatus] = useState<{ type: 'idle' | 'pending' | 'ok' | 'error'; text: string }>({
-    type: 'idle',
-    text: '',
-  });
-  const [progress, setProgress] = useState<PushProgress | null>(null);
-
-  useEffect(() => {
-    const envId = process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID;
-    const stored = typeof window !== 'undefined' ? window.localStorage.getItem('gcal_client_id') : null;
-    if (stored) setClientId(stored);
-    else if (envId) setClientId(envId);
-  }, []);
 
   function handleParse() {
     if (!rawText.trim()) {
@@ -77,15 +62,6 @@ export default function Home() {
     setParseMsg(`Đã nhận diện ${rows.length} dòng môn học → ${built.length} buổi học cụ thể.`);
   }
 
-  function handleReparseWithManualAnchor() {
-    if (!anchorWeek || !anchorDate) return;
-    const rows = parseRows(rawText);
-    const anchor: AnchorInfo = { week: parseInt(anchorWeek, 10), monday: new Date(anchorDate + 'T00:00:00') };
-    const built = buildSessions(rows, anchor);
-    setSessions(built);
-    setParseMsg(`Đã nhận diện ${rows.length} dòng môn học → ${built.length} buổi học cụ thể.`);
-  }
-
   const courseCount = useMemo(() => {
     if (!sessions) return 0;
     return new Set(sessions.map((s) => s.maMH)).size;
@@ -96,44 +72,15 @@ export default function Home() {
     downloadIcs(sessions);
   }
 
-  async function handlePushGoogle() {
-    if (!sessions || sessions.length === 0) return;
-    if (!clientId.trim()) {
-      setPushStatus({ type: 'error', text: 'Thiếu Google OAuth Client ID. Xem hướng dẫn thiết lập bên dưới.' });
-      return;
-    }
-    window.localStorage.setItem('gcal_client_id', clientId.trim());
-    setPushStatus({ type: 'pending', text: 'Đang mở cửa sổ đăng nhập Google…' });
-    setProgress(null);
-    try {
-      const token = await requestAccessToken(clientId.trim());
-      setPushStatus({ type: 'pending', text: `Đang thêm 0/${sessions.length} sự kiện…` });
-      const result = await pushToGoogleCalendar(token, sessions, (p) => {
-        setProgress(p);
-        setPushStatus({ type: 'pending', text: `Đang thêm ${p.done + p.failed}/${p.total} sự kiện…` });
-      });
-      if (result.failed === 0) {
-        setPushStatus({ type: 'ok', text: `Đã thêm thành công ${result.done} sự kiện vào Google Calendar.` });
-      } else {
-        setPushStatus({
-          type: 'error',
-          text: `Đã thêm ${result.done} sự kiện, ${result.failed} sự kiện thất bại (có thể do giới hạn tần suất — thử lại sau ít phút).`,
-        });
-      }
-    } catch (e: any) {
-      setPushStatus({ type: 'error', text: `Lỗi: ${e?.message || 'không đăng nhập được Google'}` });
-    }
-  }
-
   return (
     <>
       <header className="hero">
         <div className="inner">
           <p className="eyebrow">myBK · thời khóa biểu → lịch</p>
-          <h1>Dán thời khóa biểu, có ngay lịch học trên Google Calendar</h1>
+          <h1>Dán thời khóa biểu, có ngay file lịch .ics</h1>
           <p>
             Sao chép bảng "THỜI KHÓA BIỂU HỌC KỲ" từ myBK, dán vào đây. Công cụ tự tính đúng ngày cho từng buổi học
-            theo cột TUẦN HỌC, rồi xuất file .ics hoặc đẩy thẳng lên Google Calendar của bạn.
+            theo cột TUẦN HỌC, rồi xuất file .ics để import vào bất kỳ ứng dụng lịch nào.
           </p>
         </div>
       </header>
@@ -210,7 +157,6 @@ export default function Home() {
             <section>
               <p className="step-label">Bước 3</p>
               <h2>Xuất lịch</h2>
-              <p className="hint">Chọn một hoặc cả hai cách bên dưới.</p>
 
               <div className="row">
                 <button className="btn-brass" onClick={handleDownloadIcs}>
@@ -219,61 +165,8 @@ export default function Home() {
               </div>
               <p className="hint" style={{ marginTop: 8 }}>
                 Mở Google Calendar trên máy tính → Settings → Import &amp; export → chọn file .ics vừa tải để nhập
-                toàn bộ lịch học vào Google Calendar.
+                toàn bộ lịch học. File .ics cũng import được vào Outlook, Apple Calendar…
               </p>
-
-              <div style={{ height: 22 }} />
-
-              <div className="row" style={{ alignItems: 'flex-end' }}>
-                <label style={{ display: 'flex', flexDirection: 'column', gap: 6, flex: '1 1 320px' }}>
-                  <span className="hint" style={{ margin: 0 }}>
-                    Google OAuth Client ID
-                  </span>
-                  <input
-                    value={clientId}
-                    onChange={(e) => setClientId(e.target.value)}
-                    placeholder="xxxxxxxx.apps.googleusercontent.com"
-                    style={{
-                      fontFamily: 'IBM Plex Mono, monospace',
-                      fontSize: 13,
-                      padding: '9px 11px',
-                      border: '1px solid var(--rule)',
-                      borderRadius: 4,
-                    }}
-                  />
-                </label>
-                <button className="btn-primary" onClick={handlePushGoogle} disabled={pushStatus.type === 'pending'}>
-                  ⇪ Đăng nhập &amp; thêm vào Google Calendar
-                </button>
-              </div>
-
-              {pushStatus.type !== 'idle' && <div className={`status ${pushStatus.type === 'pending' ? 'pending' : pushStatus.type}`}>{pushStatus.text}</div>}
-
-              <details className="setup" style={{ marginTop: 18 }}>
-                <summary>Cách lấy Google OAuth Client ID (làm 1 lần)</summary>
-                <ol>
-                  <li>
-                    Vào <code>console.cloud.google.com</code>, tạo (hoặc chọn) một dự án.
-                  </li>
-                  <li>
-                    Vào <strong>APIs &amp; Services → Library</strong>, bật <strong>Google Calendar API</strong>.
-                  </li>
-                  <li>
-                    Vào <strong>APIs &amp; Services → OAuth consent screen</strong>, tạo màn hình đồng ý (loại
-                    External, thêm email của bạn vào Test users nếu app chưa xuất bản).
-                  </li>
-                  <li>
-                    Vào <strong>APIs &amp; Services → Credentials → Create Credentials → OAuth client ID</strong>,
-                    loại <strong>Web application</strong>.
-                  </li>
-                  <li>
-                    Ở mục <strong>Authorized JavaScript origins</strong>, thêm domain Vercel của bạn, ví dụ{' '}
-                    <code>https://ten-app-cua-ban.vercel.app</code> (và <code>http://localhost:3000</code> khi phát
-                    triển).
-                  </li>
-                  <li>Sao chép Client ID (dạng ...apps.googleusercontent.com) và dán vào ô ở trên.</li>
-                </ol>
-              </details>
             </section>
           </>
         )}
